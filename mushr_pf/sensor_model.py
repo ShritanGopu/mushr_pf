@@ -8,7 +8,8 @@ from threading import Lock
 
 import numpy as np
 import range_libc
-import rospy
+import rclpy
+from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
 THETA_DISCRETIZATION = 112  # Discretization of scanning angle
@@ -27,7 +28,7 @@ Z_HIT = 0.80  # Weight for hit reading
 
 class SensorModel:
     def __init__(
-        self,
+        self,node, 
         scan_topic,
         laser_ray_step,
         exclude_max_range_rays,
@@ -38,6 +39,7 @@ class SensorModel:
         car_length,
         state_lock=None,
     ):
+        # super().__init__("sensor_model")
 
         """
         Initializes the sensor model
@@ -54,7 +56,8 @@ class SensorModel:
             self.state_lock = Lock()
         else:
             self.state_lock = state_lock
-
+            
+        self.node = node
         self.particles = particles
         self.weights = weights
 
@@ -87,8 +90,8 @@ class SensorModel:
         self.do_resample = False
 
         # Subscribe to laser scans
-        self.laser_sub = rospy.Subscriber(
-            scan_topic, LaserScan, self.lidar_cb, queue_size=1
+        self.laser_sub = self.node.create_subscription(
+            LaserScan, scan_topic, self.lidar_cb, qos_profile=1
         )
 
         # FOR KIDNAPPED ROBOT PROBLEM

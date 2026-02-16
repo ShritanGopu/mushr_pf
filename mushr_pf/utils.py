@@ -4,9 +4,9 @@
 # License: BSD 3-Clause. See LICENSE.md file in root directory.
 
 import numpy as np
-import rospy
-import tf
-import tf.transformations
+import rclpy
+import tf2_ros
+import tf_transformations
 from geometry_msgs.msg import Point32, Pose, Quaternion
 from nav_msgs.srv import GetMap
 from std_msgs.msg import Header
@@ -18,7 +18,7 @@ def angle_to_quaternion(angle):
       angle: The yaw angle
       Returns: An equivalent geometry_msgs/Quaternion message
     """
-    return Quaternion(*tf.transformations.quaternion_from_euler(0, 0, angle))
+    return Quaternion(*tf_transformations.quaternion_from_euler(0, 0, angle))
 
 
 def quaternion_to_angle(q):
@@ -28,7 +28,7 @@ def quaternion_to_angle(q):
       Returns: The equivalent yaw angle
     """
     x, y, z, w = q.x, q.y, q.z, q.w
-    roll, pitch, yaw = tf.transformations.euler_from_quaternion((x, y, z, w))
+    roll, pitch, yaw = tf_transformations.euler_from_quaternion((x, y, z, w))
     return yaw
 
 
@@ -73,7 +73,7 @@ def make_header(frame_id, stamp=None):
       Returns: The resulting header
     """
     if stamp is None:
-        stamp = rospy.Time.now()
+        stamp = rclpy.time.Time().to_msg()
     header = Header()
     header.stamp = stamp
     header.frame_id = frame_id
@@ -101,27 +101,41 @@ def points(arr):
     return list(map(point, arr))
 
 
-def get_map(map_topic):
-    """Get the map from the map server
-    In:
-      map_topic: The service topic that will provide the map
-    Out:
-      map_img: A numpy array with dimensions (map_info.height, map_info.width).
-               A zero at a particular location indicates that the location is impermissible
-               A one at a particular location indicates that the location is permissible
-      map_info: Info about the map, see
-                http://docs.ros.org/kinetic/api/nav_msgs/html/msg/MapMetaData.html
-                for more info
-    """
-    rospy.wait_for_service(map_topic)
-    map_msg = rospy.ServiceProxy(map_topic, GetMap)().map
-    array_255 = np.array(map_msg.data).reshape(
-        (map_msg.info.height, map_msg.info.width)
-    )
-    map_img = np.zeros_like(array_255, dtype=bool)
-    map_img[array_255 == 0] = 1
+# def get_map(map_topic):
+#     """Get the map from the map server
+#     In:
+#       map_topic: The service topic that will provide the map
+#     Out:
+#       map_img: A numpy array with dimensions (map_info.height, map_info.width).
+#                A zero at a particular location indicates that the location is impermissible
+#                A one at a particular location indicates that the location is permissible
+#       map_info: Info about the map, see
+#                 http://docs.ros.org/kinetic/api/nav_msgs/html/msg/MapMetaData.html
+#                 for more info
+#     """
+#     rospy.wait_for_service(map_topic)
+#     map_msg = rospy.ServiceProxy(map_topic, GetMap)().map
+#     array_255 = np.array(map_msg.data).reshape(
+#         (map_msg.info.height, map_msg.info.width)
+#     )
+#     map_img = np.zeros_like(array_255, dtype=bool)
+#     map_img[array_255 == 0] = 1
 
-    return map_img, map_msg.info
+#     return map_img, map_msg.info
+
+# def get_map():
+#     req = GetMap.Request()
+#     future = self.map_client.call_async(req)
+#     rclpy.spin_until_future_complete(self, future)
+#     if future.result() is not None:
+#         map_msg = future.result().map  # full nav_msgs/OccupancyGrid
+#         array_255 = np.array(map_msg.data).reshape((map_msg.info.height, map_msg.info.width))
+#         permissible_region = np.zeros_like(array_255, dtype=bool)
+#         permissible_region[array_255 == 0] = 1
+#         return permissible_region, map_msg.info, map_msg
+#     else:
+#         self.get_logger().error('Service call failed %r' % (future.exception(),))
+#         return None, None
 
 
 def map_to_world(poses, map_info):

@@ -8,7 +8,8 @@ import time
 
 import message_filters
 import numpy as np
-import rospy
+import rclpy
+from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from matplotlib import pyplot as plt
 
@@ -56,14 +57,17 @@ def callback(true_pose, pf_pose):
 
 
 if __name__ == "__main__":
-    rospy.init_node("testpf", anonymous=True)
-    gt_topic = str(rospy.get_param("~gt_topic", "/pf/ta/viz/inferred_pose"))
-    plot = bool(rospy.get_param("~plot", False))
+    rclpy.init()
+    node = Node("testpy")
+    node.self.declare_parameter('gt_topic', "/pf/ta/viz/inferred_pose")
+    node.self.declare_parameter('plot', False)
+    gt_topic = str(node.get_parameter("gt_topic").get_parameter_value().string_value)
+    plot = bool(node.get_parameter("plot").get_parameter_value().bool_value)
 
-    # Time Synchronizer
-    pose_sub = message_filters.Subscriber("/pf/viz/inferred_pose", PoseStamped)
-    pf_sub = message_filters.Subscriber(gt_topic, PoseStamped)
+    pose_sub = message_filters.Subscriber(node, PoseStamped, "/pf/viz/inferred_pose")
+    pf_sub = message_filters.Subscriber(node, PoseStamped, gt_topic)
 
     ts = message_filters.ApproximateTimeSynchronizer([pose_sub, pf_sub], 10, 0.1)
     ts.registerCallback(callback)
-    rospy.spin()
+
+    rclpy.spin(node)
