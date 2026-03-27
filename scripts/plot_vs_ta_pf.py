@@ -61,7 +61,7 @@ def callback(true_pose, pf_pose):
 def main(args=None):
     rclpy.init()
     node = Node("testpy")
-    node.declare_parameter('gt_topic', "/car/particle_filter_node/inferred_pose")
+    node.declare_parameter('gt_topic', "/car/pf/inferred_pose")
     node.declare_parameter('plot', True)
     gt_topic = str(node.get_parameter("gt_topic").get_parameter_value().string_value)
     plot = bool(node.get_parameter("plot").get_parameter_value().bool_value)

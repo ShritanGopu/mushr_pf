@@ -23,7 +23,7 @@ def generate_launch_description():
     particle_filter_node = Node(
         package="mushr_pf",
         executable="particle_filter",
-        name="particle_filter_node",
+        name="pf",
         output="screen",
         parameters=[
             {
