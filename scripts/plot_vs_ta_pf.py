@@ -23,6 +23,7 @@ plotted = False
 
 
 def callback(true_pose, pf_pose):
+    print("in callback")
     global error_array, start_time, started, plotted
     if not started:
         start_time = time.time()
@@ -33,6 +34,7 @@ def callback(true_pose, pf_pose):
         utils.quaternion_to_angle(true_pose.pose.orientation)
         - utils.quaternion_to_angle(pf_pose.pose.orientation)
     ) ** 2
+
     error_array.append([error_x, error_y, error_t])
     print_array = np.array(error_array)
     print(
@@ -47,7 +49,7 @@ def callback(true_pose, pf_pose):
     pf_array.append([pf_pose.pose.position.x, pf_pose.pose.position.y])
 
     # Plot trajectories
-    if plot and time.time() - start_time > 40 and not plotted:
+    if time.time() - start_time > 40 and not plotted:
         plt.xlabel("x")
         plt.ylabel("y")
         plt.plot(np.array(true_array)[:, 0], np.array(true_array)[:, 1], c="r")
@@ -56,18 +58,20 @@ def callback(true_pose, pf_pose):
         plotted = True
 
 
-if __name__ == "__main__":
+def main(args=None):
     rclpy.init()
     node = Node("testpy")
-    node.self.declare_parameter('gt_topic', "/pf/ta/viz/inferred_pose")
-    node.self.declare_parameter('plot', False)
+    node.declare_parameter('gt_topic', "/car/particle_filter_node/inferred_pose")
+    node.declare_parameter('plot', True)
     gt_topic = str(node.get_parameter("gt_topic").get_parameter_value().string_value)
     plot = bool(node.get_parameter("plot").get_parameter_value().bool_value)
 
-    pose_sub = message_filters.Subscriber(node, PoseStamped, "/pf/viz/inferred_pose")
+    pose_sub = message_filters.Subscriber(node, PoseStamped, "/car/car_pose")
     pf_sub = message_filters.Subscriber(node, PoseStamped, gt_topic)
 
-    ts = message_filters.ApproximateTimeSynchronizer([pose_sub, pf_sub], 10, 0.1)
+    ts = message_filters.ApproximateTimeSynchronizer([pose_sub, pf_sub], 10, 0.5)
     ts.registerCallback(callback)
-
     rclpy.spin(node)
+
+
+main()

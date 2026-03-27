@@ -85,9 +85,10 @@ class SensorModel:
         self.ranges = None
         self.laser_angles = None  # The angles of each ray
         self.downsampled_angles = None  # The angles of the downsampled rays
+        self.downsampled_ranges = None  # The ranges of the downsampled rays
 
         # Set so that outside code can know that it's time to resample
-        self.do_resample = False
+        self.do_resample = True
 
         # Subscribe to laser scans
         self.laser_sub = self.node.create_subscription(
@@ -100,6 +101,8 @@ class SensorModel:
         self.conf_history = queue.Queue()
         self.conf_sum = 0.0
         self.confidence = 1.0
+        self._single_query = np.zeros((1, 3), dtype=np.float32)
+        self._single_ranges = None
 
     def reset_confidence(self):
         self.do_confidence_update = False
@@ -271,3 +274,29 @@ class SensorModel:
 
         # Squash weights to prevent too much peakiness
         np.power(weights, INV_SQUASH_FACTOR, weights)
+
+    # def get_last_observation(self):
+    #     if not isinstance(self.downsampled_angles, np.ndarray) or not isinstance(
+    #         self.downsampled_ranges, np.ndarray
+    #     ):
+    #         return None
+    #     return (
+    #         self.downsampled_ranges.astype(np.float32, copy=True),
+    #         self.downsampled_angles.astype(np.float32, copy=True),
+    #     )
+
+    # def expected_ranges_for_pose(self, pose, obs_angles):
+    #     if not isinstance(obs_angles, np.ndarray):
+    #         return None
+    #     num_rays = obs_angles.shape[0]
+    #     if self._single_ranges is None or self._single_ranges.shape[0] != num_rays:
+    #         self._single_ranges = np.zeros(num_rays, dtype=np.float32)
+
+    #     self._single_query[0, :] = np.asarray(pose, dtype=np.float32)
+    #     self._single_query[0, 0] += (self.CAR_LENGTH / 2) * np.cos(self._single_query[0, 2])
+    #     self._single_query[0, 1] += (self.CAR_LENGTH / 2) * np.sin(self._single_query[0, 2])
+
+    #     self.range_method.calc_range_repeat_angles(
+    #         self._single_query, obs_angles.astype(np.float32), self._single_ranges
+    #     )
+    #     return self._single_ranges.astype(np.float32, copy=True)

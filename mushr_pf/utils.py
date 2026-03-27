@@ -17,8 +17,14 @@ def angle_to_quaternion(angle):
     Convert yaw angle in radians into a quaternion message
       angle: The yaw angle
       Returns: An equivalent geometry_msgs/Quaternion message
-    """
-    return Quaternion(*tf_transformations.quaternion_from_euler(0, 0, angle))
+    """    
+    q = tf_transformations.quaternion_from_euler(0, 0, angle)
+    msg = Quaternion()
+    msg.x = q[0]
+    msg.y = q[1]
+    msg.z = q[2]
+    msg.w = q[3]
+    return msg
 
 
 def quaternion_to_angle(q):
@@ -73,7 +79,7 @@ def make_header(frame_id, stamp=None):
       Returns: The resulting header
     """
     if stamp is None:
-        stamp = rclpy.time.Time().to_msg()
+      stamp = rclpy.time.Time().to_msg()
     header = Header()
     header.stamp = stamp
     header.frame_id = frame_id

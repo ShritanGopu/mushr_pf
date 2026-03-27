@@ -5,18 +5,19 @@
 
 import queue
 from threading import Lock
-import time
-import numpy as np
-from rclpy.node import Node
-import rclpy
-import tf2_ros as tf
-from nav_msgs.srv import GetMap
-from geometry_msgs.msg import PoseArray, PoseStamped, PointStamped
-from nav_msgs.msg import OccupancyGrid, Odometry
-from sensor_msgs.msg import LaserScan
-from tf_transformations import euler_from_quaternion, quaternion_from_euler
 
-import mushr_pf.utils as utils
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+import tf2_ros
+from tf_transformations import euler_from_quaternion, quaternion_from_euler
+from geometry_msgs.msg import PoseArray, PoseStamped, PointStamped, TransformStamped
+from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.srv import GetMap
+from sensor_msgs.msg import LaserScan
+
+from mushr_pf import utils
 from mushr_pf.motion_model import KinematicMotionModel
 from mushr_pf.resample import ReSampler
 from mushr_pf.sensor_model import SensorModel
@@ -32,9 +33,26 @@ class ParticleFilter(Node):
     def __init__(self):
         """
         Initializes the particle filter
+          publish_tf: Whether or not to publish the tf. Should be false in sim, true on real robot
+          n_particles: The number of particles
+          n_viz_particles: The number of particles to visualize
+          odometry_topic: The topic containing odometry information
+          motor_state_topic: The topic containing motor state information
+          servo_state_topic: The topic containing servo state information
+          scan_topic: The topic containing laser scans
+          laser_ray_step: Step for downsampling laser scans
+          exclude_max_range_rays: Whether to exclude rays that are beyond the max range
+          max_range_meters: The max range of the laser
+          speed_to_erpm_offset: Offset conversion param from rpm to speed
+          speed_to_erpm_gain: Gain conversion param from rpm to speed
+          steering_angle_to_servo_offset: Offset conversion param from servo position to steering angle
+          steering_angle_to_servo_gain: Gain conversion param from servo position to steering angle
+          car_length: The length of the car
         """
         super().__init__("particle_filter")
         
+        self.get_logger().info("Initializing particle filter node")
+
         # Declare parameters
         self.declare_parameter('car_name', "car")
         self.declare_parameter('publish_tf', False)
@@ -43,7 +61,7 @@ class ParticleFilter(Node):
         self.declare_parameter('odometry_topic', '/vesc/odom')
         self.declare_parameter('motor_state_topic', '/vesc/sensors/core')
         self.declare_parameter('servo_state_topic', '/vesc/sensors/servo_position_command')
-        self.declare_parameter('scan_topic', '/scan')
+        self.declare_parameter('scan_topic', '/car/scan')
         self.declare_parameter('laser_ray_step', 18)
         self.declare_parameter('exclude_max_range_rays', True)
         self.declare_parameter('max_range_meters', 11.0)
@@ -69,9 +87,9 @@ class ParticleFilter(Node):
         speed_to_erpm_gain = self.get_parameter('speed_to_erpm_gain').value
         steering_angle_to_servo_offset = self.get_parameter('steering_angle_to_servo_offset').value
         steering_angle_to_servo_gain = self.get_parameter('steering_angle_to_servo_gain').value
-        car_length = self.get_parameter('car_length').value
-        
-        self.car_length = car_length  # Store as instance variable for use in methods
+        self.car_length = self.get_parameter('car_length').value
+
+
         self.PUBLISH_TF = publish_tf
         # The number of particles in this implementation, the total number of particles is constant.
         self.N_PARTICLES = n_particles
@@ -90,11 +108,13 @@ class ParticleFilter(Node):
         # A lock used to prevent concurrency issues. You do not need to worry about this
         self.state_lock = Lock()
 
-        self.tf_buffer = tf.Buffer()
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.get_logger().info("waiting on map message")
 
-        self.tfl = tf.TransformListener(self.tf_buffer, self)  # Transforms points between coordinate frames
-
+        self.permissible_region = None
         self.map_info = None
+
 
         self.map_service_name = '/map_server/map'
 
@@ -123,21 +143,21 @@ class ParticleFilter(Node):
         # Get the map
         self.permissible_region, self.map_info, self.raw_map_msg = get_map()
 
+        # Globally initialize the particles
+
         # Publish particle filter state
         # Used to create a tf between the map and the laser for visualization
-        self.pub_tf = tf.TransformBroadcaster(self)
+        self.pub_tf = tf2_ros.TransformBroadcaster(self)
 
         # Publishes the expected pose
-        self.pose_pub = self.create_publisher(PoseStamped, "inferred_pose", qos_profile=1)
+        self.pose_pub = self.create_publisher(PoseStamped, "~/inferred_pose", 1)
         # Publishes a subsample of the particles
-        self.particle_pub = self.create_publisher(PoseArray, "particles", qos_profile=1)
+        self.particle_pub = self.create_publisher(PoseArray, "~/particles", 1)
         # Publishes the most recent laser scan
-        self.pub_laser = self.create_publisher(LaserScan, "scan", qos_profile=1)
+        self.pub_laser = self.create_publisher(LaserScan, "~/scan", 1)
         # Publishes the path of the car
-        self.pub_odom = self.create_publisher(Odometry, "odom", qos_profile=1)
+        self.pub_odom = self.create_publisher(Odometry, "~/odom", 1)
 
-
-        time.sleep(1.0)
         self.initialize_global()
 
         # An object used for resampling
@@ -152,20 +172,19 @@ class ParticleFilter(Node):
             self.raw_map_msg,
             self.particles,
             self.weights,
-            car_length,
+            self.car_length,
             self.state_lock,
         )
 
         # An object used for applying kinematic motion model
-        self.motion_model = KinematicMotionModel(
-            self,
+        self.motion_model = KinematicMotionModel(self,
             motor_state_topic,
             servo_state_topic,
             speed_to_erpm_offset,
             speed_to_erpm_gain,
             steering_angle_to_servo_offset,
             steering_angle_to_servo_gain,
-            car_length,
+            self.car_length,
             self.particles,
             self.state_lock,
         )
@@ -202,19 +221,18 @@ class ParticleFilter(Node):
         # Subscribe to the '/clicked_point' topic. Publised by Foxglove. 
         # See clicked_pose_cb function in this file for more info
         self.click_sub = self.create_subscription(
-            PointStamped,
-            "/clicked_point",
-            self.clicked_point_cb,
-            qos_profile=1       )
+            PointStamped, "/clicked_point", self.clicked_point_cb, 1
+        )
 
-        # Wait for first laser scan message
         self.last_scan_msg = None
+
         self.scan_sub = self.create_subscription(LaserScan, scan_topic, self._scan_callback, qos_profile=1)
+
         while self.last_scan_msg is None:
             rclpy.spin_once(self, timeout_sec=0.1)
-        
-        print("Initialization complete")
-    
+
+        self.get_logger().info("Initialization complete")
+
     def _scan_callback(self, msg):
         """Callback to capture first laser scan"""
         if self.last_scan_msg is None:
@@ -273,11 +291,24 @@ class ParticleFilter(Node):
                  in using the time at which this function was called as the stamp
         """
         if stamp is None:
-            stamp = self.get_clock().now()
+            stamp = self.get_clock().now().to_msg()
         try:
             # Lookup the offset between laser and odom
-            delta_off, delta_rot = self.tfl.lookupTransform(
-                self.name +"/laser_link", self.name +"/odom", rclpy.time.Time(0)
+            transform = self.tf_buffer.lookup_transform(
+                self.name + "/laser_link",
+                self.name + "/odom",
+                rclpy.time.Time(),
+            )
+            delta_off = (
+                transform.transform.translation.x,
+                transform.transform.translation.y,
+                transform.transform.translation.z,
+            )
+            delta_rot = (
+                transform.transform.rotation.x,
+                transform.transform.rotation.y,
+                transform.transform.rotation.z,
+                transform.transform.rotation.w,
             )
 
             # Transform offset to be w.r.t the map
@@ -285,19 +316,28 @@ class ParticleFilter(Node):
             off_y = delta_off[0] * np.sin(pose[2]) + delta_off[1] * np.cos(pose[2])
 
             # Broadcast the tf
-            self.pub_tf.sendTransform(
-                (pose[0] + off_x, pose[1] + off_y, 0.0),
-                quaternion_from_euler(
-                    0, 0, pose[2] + euler_from_quaternion(delta_rot)[2]
-                ),
-                stamp,
-                self.name +"/odom",
-                "/map",
+            tf_msg = TransformStamped()
+            tf_msg.header.stamp = stamp
+            tf_msg.header.frame_id = "/map"
+            tf_msg.child_frame_id = self.name + "/odom"
+            tf_msg.transform.translation.x = pose[0] + off_x
+            tf_msg.transform.translation.y = pose[1] + off_y
+            tf_msg.transform.translation.z = 0.0
+            quat = quaternion_from_euler(
+                0, 0, pose[2] + euler_from_quaternion(delta_rot)[2]
             )
+            tf_msg.transform.rotation.x = quat[0]
+            tf_msg.transform.rotation.y = quat[1]
+            tf_msg.transform.rotation.z = quat[2]
+            tf_msg.transform.rotation.w = quat[3]
+            self.pub_tf.sendTransform(tf_msg)
 
-        except (tf.LookupException) as e:  # Will occur if odom frame does not exist
-            print(e)
-            print("failed to find odom")
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ) as e:
+            self.get_logger().warning(f"failed to find odom transform: {e}")
 
     def expected_pose(self):
         """
@@ -357,19 +397,19 @@ class ParticleFilter(Node):
             if self.PUBLISH_TF:
                 self.publish_tf(self.inferred_pose)
             ps = PoseStamped()
-            ps.header = utils.make_header("map")
+            ps.header = utils.make_header("map", self.get_clock().now().to_msg())
             ps.pose.position.x = self.inferred_pose[0]
             ps.pose.position.y = self.inferred_pose[1]
             ps.pose.orientation = utils.angle_to_quaternion(self.inferred_pose[2])
-            if self.pose_pub.get_num_connections() > 0:
+            if self.pose_pub.get_subscription_count() > 0:
                 self.pose_pub.publish(ps)
-            if self.pub_odom.get_num_connections() > 0:
+            if self.pub_odom.get_subscription_count() > 0:
                 odom = Odometry()
                 odom.header = ps.header
                 odom.pose.pose = ps.pose
                 self.pub_odom.publish(odom)
 
-        if self.particle_pub.get_num_connections() > 0:
+        if self.particle_pub.get_subscription_count() > 0:
             if self.particles.shape[0] > self.N_VIZ_PARTICLES:
                 # randomly downsample particles
                 proposal_indices = np.random.choice(
@@ -379,7 +419,7 @@ class ParticleFilter(Node):
             else:
                 self.publish_particles(self.particles)
 
-        if self.pub_laser.get_num_connections() > 0 and isinstance(
+        if self.pub_laser.get_subscription_count() > 0 and isinstance(
             self.sensor_model.last_laser, LaserScan
         ):
             self.sensor_model.last_laser.header.frame_id = "/laser"
@@ -393,7 +433,7 @@ class ParticleFilter(Node):
           particles: To particles to publish
         """
         pa = PoseArray()
-        pa.header = utils.make_header("map")
+        pa.header = utils.make_header("map", self.get_clock().now().to_msg())
         pa.poses = utils.particles_to_poses(particles)
         self.particle_pub.publish(pa)
 
@@ -482,22 +522,18 @@ class ParticleFilter(Node):
 
 
 def main(args=None):
-    rclpy.init()  # Initialize rclpy
-    
-    # Create the particle filter node
+    rclpy.init(args=args)
     pf = ParticleFilter()
-    
-    # Create a custom executor if needed for the update loop
+
     try:
         while rclpy.ok():
-            # Callbacks are running in separate threads
-            
+            rclpy.spin_once(pf, timeout_sec=0.1)
+
             if pf.sensor_model.confidence < 1e-20 and not pf.global_localize:
-                print("=================== KIDNAPPED =====================")
+                pf.get_logger().info("=================== KIDNAPPED =====================")
                 pf.global_localize = True
 
-            # update particle filter
-            if pf.global_localize:  # no resample
+            if pf.global_localize:
                 temp = pf.N_VIZ_PARTICLES
                 pf.N_VIZ_PARTICLES = 1000
                 pf.global_localization()
@@ -506,17 +542,10 @@ def main(args=None):
                 pf.ents = queue.Queue()
                 pf.ents_sum = 0.0
                 pf.noisy_cnt = 0
-            # Check if the sensor model says it's time to resample
             elif pf.sensor_model.do_resample:
-                # Reset so that we don't keep resampling
                 pf.sensor_model.do_resample = False
                 pf.resampler.resample_low_variance()
-                pf.visualize()  # Perform visualization
-            
-            # Spin briefly to allow callbacks to execute
-            rclpy.spin_once(pf, timeout_sec=0.1)
-    except KeyboardInterrupt:
-        pass
+                pf.visualize()
     finally:
         pf.destroy_node()
         rclpy.shutdown()
